@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 st.set_page_config(page_title="Cleardeals Automation", layout="wide")
-st.title("🏠 Cleardeals Lead Summary Tool (Smart Matching)")
+st.title("🏠 Cleardeals Lead Summary Tool (Final Fix)")
 
 # 65 Standard Locations List
 locations = [
@@ -16,82 +16,70 @@ locations = [
     "Shikrapur", "Tathawade", "Tingre Nagar", "Undri", "Viman Nagar", "Vishrantwadi", "Wadgaon Sheri", "Wagholi", "Wakad", "Warje"
 ]
 
-def get_counts(df, location_list):
-    """Smart matching logic to handle spelling variations"""
-    counts = {}
-    dups = {}
-    
-    # Pre-clean the area column (make it lowercase for matching)
+def process_data(df, location_list):
     df['area_clean'] = df['area'].astype(str).str.lower().str.strip()
-    
-    for loc in location_list:
-        # Search criteria based on location name
-        search_term = loc.split('(')[0].strip().lower() # Takes 'Hinjewadi' from 'Hinjewadi (All Phases)'
-        
+    results = []
+    matched_indices = set()
+
+    for i, loc in enumerate(location_list, 1):
+        search_term = loc.split('(')[0].strip().lower()
         if "hinjewadi" in search_term:
-            # Special case for Hinjewadi/Hinjawadi
-            match_condition = df['area_clean'].str.contains('hinjewadi|hinjawadi', case=False, na=False)
+            mask = df['area_clean'].str.contains('hinjewadi|hinjawadi', na=False)
         else:
-            match_condition = df['area_clean'].str.contains(search_term, case=False, na=False)
-            
-        temp_df = df[match_condition]
-        counts[loc] = len(temp_df)
-        dups[loc] = len(temp_df[temp_df.duplicated(subset=['owner_contact'])])
+            mask = df['area_clean'].str.contains(search_term, na=False)
         
-    return counts, dups
+        matched_df = df[mask]
+        matched_indices.update(matched_df.index)
+        
+        results.append({
+            'loc': loc,
+            'count': len(matched_df),
+            'dups': len(matched_df[matched_df.duplicated(subset=['owner_contact'])])
+        })
+    
+    # Check for unmatched areas
+    unmatched_df = df[~df.index.isin(matched_indices)]
+    return results, unmatched_df
 
-rent_file = st.file_uploader("1. Upload Rental Leads (CSV)", type=['csv'])
-sale_file = st.file_uploader("2. Upload Resale Leads (CSV)", type=['csv'])
+rent_file = st.file_uploader("1. Upload Rental CSV", type=['csv'])
+sale_file = st.file_uploader("2. Upload Resale CSV", type=['csv'])
 
-if st.button("Generate Summary Report"):
+if st.button("Generate Final Report"):
     if rent_file and sale_file:
-        try:
-            df_rent = pd.read_csv(rent_file)
-            df_sale = pd.read_csv(sale_file)
-            
-            # Use Smart Matching to get counts
-            rent_counts, rent_dups = get_counts(df_rent, locations)
-            sale_counts, sale_dups = get_counts(df_sale, locations)
+        df_rent = pd.read_csv(rent_file)
+        df_sale = pd.read_csv(sale_file)
+        
+        rent_res, rent_unmatched = process_data(df_rent, locations)
+        sale_res, sale_unmatched = process_data(df_sale, locations)
 
-            # Build final table
-            rows = []
-            for i, loc in enumerate(locations, 1):
-                r_cnt = rent_counts.get(loc, 0)
-                s_cnt = sale_counts.get(loc, 0)
-                rows.append({
-                    'Sr. No.': i,
-                    'Location Name': loc,
-                    'No. of Rental Property Leads': r_cnt,
-                    'No. of Resale Property Leads': s_cnt,
-                    'Total Leads': r_cnt + s_cnt,
-                    'Duplicate data Rental Property Leads': rent_dups.get(loc, 0),
-                    'Duplicate Data Resale Property Leads': sale_dups.get(loc, 0)
-                })
+        final_rows = []
+        for i, loc in enumerate(locations):
+            final_rows.append({
+                'Sr. No.': i+1,
+                'Location Name': loc,
+                'No. of Rental Property Leads': rent_res[i]['count'],
+                'No. of Resale Property Leads': sale_res[i]['count'],
+                'Total Leads': rent_res[i]['count'] + sale_res[i]['count'],
+                'Duplicate data Rental Property Leads': rent_res[i]['dups'],
+                'Duplicate Data Resale Property Leads': sale_res[i]['dups']
+            })
 
-            df_final = pd.DataFrame(rows)
+        df_final = pd.DataFrame(final_rows)
+        
+        # Totals
+        sums = df_final.sum(numeric_only=True)
+        total_row = pd.DataFrame([['Total', '65 Locations', sums[0], sums[1], sums[2], sums[3], sums[4]]], columns=df_final.columns)
+        df_display = pd.concat([df_final, total_row], ignore_index=True)
 
-            # Footer Rows (Total Sum)
-            sums = df_final.sum(numeric_only=True)
-            total_row = pd.DataFrame([[
-                'Total', '65 Locations', sums['No. of Rental Property Leads'], sums['No. of Resale Property Leads'], 
-                sums['Total Leads'], sums['Duplicate data Rental Property Leads'], sums['Duplicate Data Resale Property Leads']
-            ]], columns=df_final.columns)
+        st.success("✅ Report Taiyar!")
+        st.dataframe(df_display)
 
-            # Footer Rows (Total Locations Count)
-            loc_rent = (df_final['No. of Rental Property Leads'] > 0).sum()
-            loc_sale = (df_final['No. of Resale Property Leads'] > 0).sum()
-            loc_row = pd.DataFrame([[
-                None, None, f"Total Location {loc_rent}", f"Total Location {loc_sale}", None, None, None
-            ]], columns=df_final.columns)
+        # Show Unmatched Data
+        if not sale_unmatched.empty:
+            st.warning("⚠️ Ye areas Resale file mein mile par hamari list mein nahi the:")
+            st.write(sale_unmatched['area'].unique())
 
-            df_display = pd.concat([df_final, total_row, loc_row], ignore_index=True)
-
-            st.success("✅ Report Updated with Smart Spelling Matching!")
-            st.dataframe(df_display)
-            
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_display.to_excel(writer, index=False, sheet_name='Summary')
-            st.download_button("📥 Download Corrected Excel Report", data=output.getvalue(), file_name="Lead_Summary_Corrected.xlsx")
-        except Exception as e:
-            st.error(f"Error: {e}. Please ensure CSV columns are named 'area' and 'owner_contact'.")
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_display.to_excel(writer, index=False, sheet_name='Summary')
+        st.download_button("📥 Download Excel", data=output.getvalue(), file_name="Final_Report.xlsx")
