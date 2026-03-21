@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
 import io
+import re
 
 st.set_page_config(page_title="Cleardeals Automation", layout="wide")
-st.title("🏠 Cleardeals Lead Summary Tool (Final Fix)")
+st.title("🏠 Cleardeals Lead Summary Tool (With Extra Areas)")
 
-# 65 Standard Locations List
 locations = [
     "Alandi", "Aundh", "Bakori", "Balewadi", "Baner", "Bavdhan", "Bhekraiwadi", "Bhosari", "Bibewad", "Blue Ridge",
     "Camp", "Chandan Nagar", "Chinchwad", "Dapodi", "Dhayri", "Dhanori", "Dighi", "Dudulgaon", "Fursungi", "Gahunje",
@@ -16,70 +16,77 @@ locations = [
     "Shikrapur", "Tathawade", "Tingre Nagar", "Undri", "Viman Nagar", "Vishrantwadi", "Wadgaon Sheri", "Wagholi", "Wakad", "Warje"
 ]
 
-def process_data(df, location_list):
-    df['area_clean'] = df['area'].astype(str).str.lower().str.strip()
-    results = []
-    matched_indices = set()
+def clean(text):
+    return re.sub(r'[^a-z0-9]', '', str(text).lower())
 
-    for i, loc in enumerate(location_list, 1):
-        search_term = loc.split('(')[0].strip().lower()
-        if "hinjewadi" in search_term:
+def process_with_extra(df, main_locations):
+    df['area_clean'] = df['area'].apply(clean)
+    main_counts = {loc: 0 for loc in main_locations}
+    main_dups = {loc: 0 for loc in main_locations}
+    matched_indices = []
+
+    # Match main locations
+    for loc in main_locations:
+        clean_loc = clean(loc.split('(')[0])
+        mask = df['area_clean'].str.contains(clean_loc, na=False)
+        if clean_loc == "hinjewadi":
             mask = df['area_clean'].str.contains('hinjewadi|hinjawadi', na=False)
-        else:
-            mask = df['area_clean'].str.contains(search_term, na=False)
         
         matched_df = df[mask]
-        matched_indices.update(matched_df.index)
-        
-        results.append({
-            'loc': loc,
-            'count': len(matched_df),
-            'dups': len(matched_df[matched_df.duplicated(subset=['owner_contact'])])
-        })
+        main_counts[loc] = len(matched_df)
+        main_dups[loc] = len(matched_df[matched_df.duplicated(subset=['owner_contact'])])
+        matched_indices.extend(matched_df.index.tolist())
+
+    # Identify Extra Locations
+    extra_df = df[~df.index.isin(matched_indices)].copy()
+    extra_summary = extra_df.groupby('area').agg(
+        Leads=('area', 'count'),
+        Duplicates=('owner_contact', lambda x: x.duplicated().sum())
+    ).reset_index()
     
-    # Check for unmatched areas
-    unmatched_df = df[~df.index.isin(matched_indices)]
-    return results, unmatched_df
+    return main_counts, main_dups, extra_summary
 
 rent_file = st.file_uploader("1. Upload Rental CSV", type=['csv'])
 sale_file = st.file_uploader("2. Upload Resale CSV", type=['csv'])
 
-if st.button("Generate Final Report"):
+if st.button("Generate Report with Extra Areas"):
     if rent_file and sale_file:
         df_rent = pd.read_csv(rent_file)
         df_sale = pd.read_csv(sale_file)
-        
-        rent_res, rent_unmatched = process_data(df_rent, locations)
-        sale_res, sale_unmatched = process_data(df_sale, locations)
 
-        final_rows = []
-        for i, loc in enumerate(locations):
-            final_rows.append({
-                'Sr. No.': i+1,
-                'Location Name': loc,
-                'No. of Rental Property Leads': rent_res[i]['count'],
-                'No. of Resale Property Leads': sale_res[i]['count'],
-                'Total Leads': rent_res[i]['count'] + sale_res[i]['count'],
-                'Duplicate data Rental Property Leads': rent_res[i]['dups'],
-                'Duplicate Data Resale Property Leads': sale_res[i]['dups']
+        r_main, r_dup, r_extra = process_with_extra(df_rent, locations)
+        s_main, s_dup, s_extra = process_with_extra(df_sale, locations)
+
+        # 1. Main Table
+        rows = []
+        for i, loc in enumerate(locations, 1):
+            rows.append({
+                'Sr. No.': i, 'Location Name': loc,
+                'Rental Leads': r_main[loc], 'Resale Leads': s_main[loc],
+                'Total': r_main[loc] + s_main[loc],
+                'Rental Dup': r_dup[loc], 'Resale Dup': s_dup[loc]
             })
+        df_final = pd.DataFrame(rows)
 
-        df_final = pd.DataFrame(final_rows)
-        
-        # Totals
+        # 2. Totals
         sums = df_final.sum(numeric_only=True)
-        total_row = pd.DataFrame([['Total', '65 Locations', sums[0], sums[1], sums[2], sums[3], sums[4]]], columns=df_final.columns)
-        df_display = pd.concat([df_final, total_row], ignore_index=True)
+        total_row = pd.DataFrame([['Total', '65 Locations', sums[1], sums[2], sums[3], sums[4], sums[5]]], columns=df_final.columns)
+        
+        st.subheader("📊 Main 65 Locations Summary")
+        st.dataframe(pd.concat([df_final, total_row], ignore_index=True))
 
-        st.success("✅ Report Taiyar!")
-        st.dataframe(df_display)
+        # 3. Extra Locations Table
+        st.subheader("⚠️ Extra Locations Found (Not in List)")
+        all_extra = pd.concat([r_extra.assign(Type='Rental'), s_extra.assign(Type='Resale')])
+        if not all_extra.empty:
+            st.dataframe(all_extra)
+            st.info(f"Total Extra Areas Found: {len(all_extra['area'].unique())}")
+        else:
+            st.success("No extra locations found!")
 
-        # Show Unmatched Data
-        if not sale_unmatched.empty:
-            st.warning("⚠️ Ye areas Resale file mein mile par hamari list mein nahi the:")
-            st.write(sale_unmatched['area'].unique())
-
+        # Excel Export
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_display.to_excel(writer, index=False, sheet_name='Summary')
-        st.download_button("📥 Download Excel", data=output.getvalue(), file_name="Final_Report.xlsx")
+            pd.concat([df_final, total_row], ignore_index=True).to_excel(writer, index=False, sheet_name='Main_Summary')
+            all_extra.to_excel(writer, index=False, sheet_name='Extra_Locations')
+        st.download_button("📥 Download Excel (Includes Extra Areas)", data=output.getvalue(), file_name="Cleardeals_Final_Report.xlsx")
