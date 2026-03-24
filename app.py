@@ -3,10 +3,10 @@ import pandas as pd
 import io
 import re
 
-st.set_page_config(page_title="Cleardeals Automation", layout="wide")
-st.title("🏠 Cleardeals Lead Summary Tool (Duplicate Data Fixed)")
+st.set_page_config(page_title="Cleardeals Lead Tool", layout="wide")
+st.title("🏠 Cleardeals Lead Summary Tool (Final Proper Version)")
 
-# 65 Standard Locations
+# તમારી અપડેટેડ લોકેશન લિસ્ટ (૬૭ લોકેશન)
 locations = [
     "Alandi", "Aundh", "Bakori", "Balewadi", "Baner", "Bavdhan", "Bhekraiwadi", "Bhosari", "Bibewad", "Blue Ridge",
     "Camp", "Chandan Nagar", "Chinchwad", "Dapodi", "Dhayri", "Dhanori", "Dighi", "Dudulgaon", "Fursungi", "Gahunje",
@@ -17,63 +17,70 @@ locations = [
     "Tathawade", "Tingre Nagar", "Undri", "Viman Nagar", "Vishrantwadi", "Wadgaon Sheri", "Wagholi", "Wakad", "Warje"
 ]
 
-def clean_loc(text):
+def load_file(uploaded_file):
+    if uploaded_file is not None:
+        if uploaded_file.name.endswith('.csv'):
+            return pd.read_csv(uploaded_file)
+        else:
+            return pd.read_excel(uploaded_file)
+    return None
+
+def clean_txt(text):
     return re.sub(r'[^a-z0-9]', '', str(text).lower().strip())
 
-def clean_phone(phone):
-    return re.sub(r'[^0-9]', '', str(phone).strip())
+def clean_num(num):
+    return re.sub(r'[^0-9]', '', str(num).strip())
 
-def process_data(df_rent, df_sale, main_locations):
-    # Cleaning Data
-    df_rent['area_clean'] = df_rent['area'].apply(clean_loc)
-    df_sale['area_clean'] = df_sale['area'].apply(clean_loc)
+def process_leads(df_rent, df_sale, main_list):
+    # Cleaning
+    df_rent['area_clean'] = df_rent['area'].apply(clean_txt)
+    df_sale['area_clean'] = df_sale['area'].apply(clean_txt)
     
     if 'owner_contact' in df_rent.columns:
-        df_rent['contact_clean'] = df_rent['owner_contact'].apply(clean_phone)
+        df_rent['contact_clean'] = df_rent['owner_contact'].apply(clean_num)
     if 'owner_contact' in df_sale.columns:
-        df_sale['contact_clean'] = df_sale['owner_contact'].apply(clean_phone)
+        df_sale['contact_clean'] = df_sale['owner_contact'].apply(clean_num)
 
     main_rows = []
-    matched_rent_idx = set()
-    matched_sale_idx = set()
+    r_matched_idx = set()
+    s_matched_idx = set()
 
-    for i, loc in enumerate(main_locations, 1):
-        search_term = clean_loc(loc.split('(')[0])
+    for i, loc in enumerate(main_list, 1):
+        term = clean_txt(loc.split('(')[0])
         
-        # Smart Matching
-        if "hinjewadi" in search_term:
+        # Matching
+        if "hinjewadi" in term:
             r_mask = df_rent['area_clean'].str.contains('hinjewadi|hinjawadi', na=False)
             s_mask = df_sale['area_clean'].str.contains('hinjewadi|hinjawadi', na=False)
         else:
-            r_mask = df_rent['area_clean'].str.contains(search_term, na=False)
-            s_mask = df_sale['area_clean'].str.contains(search_term, na=False)
-        
+            r_mask = df_rent['area_clean'].str.contains(term, na=False)
+            s_mask = df_sale['area_clean'].str.contains(term, na=False)
+            
         r_df = df_rent[r_mask]
         s_df = df_sale[s_mask]
         
-        matched_rent_idx.update(r_df.index.tolist())
-        matched_sale_idx.update(s_df.index.tolist())
+        r_matched_idx.update(r_df.index.tolist())
+        s_matched_idx.update(s_df.index.tolist())
         
-        # Accurate Duplicate Logic: keeps all duplicates except the first occurrence
-        r_dup = r_df.duplicated(subset=['contact_clean'], keep='first').sum() if 'contact_clean' in r_df.columns else 0
-        s_dup = s_df.duplicated(subset=['contact_clean'], keep='first').sum() if 'contact_clean' in s_df.columns else 0
+        # Duplicates
+        r_dup = r_df.duplicated(subset=['contact_clean']).sum() if 'contact_clean' in r_df.columns else 0
+        s_dup = s_df.duplicated(subset=['contact_clean']).sum() if 'contact_clean' in s_df.columns else 0
         
         main_rows.append({
-            'Sr. No.': i, 
-            'Location Name': loc,
-            'No. of Rental Property Leads': len(r_df), 
+            'Sr. No.': i, 'Location Name': loc,
+            'No. of Rental Property Leads': len(r_df),
             'No. of Resale Property Leads': len(s_df),
             'Total Leads': len(r_df) + len(s_df),
-            'No. of duplicate data in rent': r_dup,
-            'No. of duplicate data in resale': s_dup
+            'Duplicate data Rental Property Leads': r_dup,
+            'Duplicate data Resale Property Leads': s_dup
         })
 
-    # Extra Areas logic
-    rent_extra = df_rent[~df_rent.index.isin(matched_rent_idx)]
-    sale_extra = df_sale[~df_sale.index.isin(matched_sale_idx)]
+    # Extra areas
+    r_ex = df_rent[~df_rent.index.isin(r_matched_idx)]
+    s_ex = df_sale[~df_sale.index.isin(s_matched_idx)]
     
-    r_ex_sum = rent_extra.groupby('area').size().reset_index(name='Rental Leads')
-    s_ex_sum = sale_extra.groupby('area').size().reset_index(name='Resale Leads')
+    r_ex_sum = r_ex.groupby('area').size().reset_index(name='Rental Leads')
+    s_ex_sum = s_ex.groupby('area').size().reset_index(name='Resale Leads')
     
     extra_df = pd.merge(r_ex_sum, s_ex_sum, on='area', how='outer').fillna(0)
     extra_df['Total Leads'] = extra_df['Rental Leads'] + extra_df['Resale Leads']
@@ -81,39 +88,36 @@ def process_data(df_rent, df_sale, main_locations):
     
     return pd.DataFrame(main_rows), extra_df
 
-rent_file = st.file_uploader("1. Upload Rental Leads (CSV)", type=['csv'])
-sale_file = st.file_uploader("2. Upload Resale Leads (CSV)", type=['csv'])
+# UI Section
+f_rent = st.file_uploader("1. Rental Leads Upload (CSV/Excel)", type=['csv', 'xlsx', 'xls'])
+f_sale = st.file_uploader("2. Resale Leads Upload (CSV/Excel)", type=['csv', 'xlsx', 'xls'])
 
-if st.button("Generate Final Report"):
-    if rent_file and sale_file:
-        df_r = pd.read_csv(rent_file)
-        df_s = pd.read_csv(sale_file)
-
-        df_main, df_extra = process_data(df_r, df_s, locations)
-
-        # Totals calculation
-        total_row = pd.DataFrame([[
-            'Total', '65 Locations', 
-            df_main['No. of Rental Property Leads'].sum(), 
-            df_main['No. of Resale Property Leads'].sum(), 
-            df_main['Total Leads'].sum(), 
-            df_main['No. of duplicate data in rent'].sum(), 
-            df_main['No. of duplicate data in resale'].sum()
-        ]], columns=df_main.columns)
-
-        df_final = pd.concat([df_main, total_row], ignore_index=True)
-
-        st.subheader("📊 Lead Summary (Duplicates Fixed)")
+if st.button("Generate Excel Report"):
+    if f_rent and f_sale:
+        df_rent = load_file(f_rent)
+        df_sale = load_file(f_sale)
+        
+        df_m, df_e = process_leads(df_rent, df_sale, locations)
+        
+        # Total Row
+        t_row = pd.DataFrame([[
+            'Total', 'All Locations', df_m['No. of Rental Property Leads'].sum(), 
+            df_m['No. of Resale Property Leads'].sum(), df_m['Total Leads'].sum(),
+            df_m['Duplicate data Rental Property Leads'].sum(),
+            df_m['Duplicate data Resale Property Leads'].sum()
+        ]], columns=df_m.columns)
+        
+        df_final = pd.concat([df_m, t_row], ignore_index=True)
+        
+        st.success("✅ રિપોર્ટ તૈયાર છે!")
         st.dataframe(df_final)
-
-        if not df_extra.empty:
-            st.subheader(f"⚠️ Extra Areas Found: {len(df_extra)}")
-            st.dataframe(df_extra)
-
+        
+        # Excel Download
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_final.to_excel(writer, index=False, sheet_name='Summary')
-            if not df_extra.empty:
-                df_extra.to_excel(writer, index=False, sheet_name='Extra Locations')
-        
-        st.download_button("📥 Download Final Excel Report", data=output.getvalue(), file_name="Lead_Summary_Report.xlsx")
+            if not df_e.empty:
+                # Add gap and Extra Locations in same sheet
+                df_e.to_excel(writer, index=False, sheet_name='Summary', startrow=len(df_final)+4)
+                
+        st.download_button("📥 Download Final Excel", data=output.getvalue(), file_name="Cleardeals_Summary.xlsx")
