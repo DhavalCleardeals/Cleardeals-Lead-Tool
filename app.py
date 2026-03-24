@@ -4,9 +4,9 @@ import io
 import re
 
 st.set_page_config(page_title="Cleardeals Automation", layout="wide")
-st.title("🏠 Cleardeals Lead Summary Tool (Separate Duplicate Counts)")
+st.title("🏠 Cleardeals Lead Summary Tool (Duplicate Data Fixed)")
 
-# તમારી ૬૫ લોકેશનની લિસ્ટ
+# 65 Standard Locations
 locations = [
     "Alandi", "Aundh", "Bakori", "Balewadi", "Baner", "Bavdhan", "Bhekraiwadi", "Bhosari", "Bibewad", "Blue Ridge",
     "Camp", "Chandan Nagar", "Chinchwad", "Dapodi", "Dhayri", "Dhanori", "Dighi", "Dudulgaon", "Fursungi", "Gahunje",
@@ -17,21 +17,30 @@ locations = [
     "Tathawade", "Tingre Nagar", "Undri", "Viman Nagar", "Vishrantwadi", "Wadgaon Sheri", "Wagholi", "Wakad", "Warje"
 ]
 
-def clean(text):
+def clean_loc(text):
     return re.sub(r'[^a-z0-9]', '', str(text).lower().strip())
 
+def clean_phone(phone):
+    return re.sub(r'[^0-9]', '', str(phone).strip())
+
 def process_data(df_rent, df_sale, main_locations):
-    df_rent['area_clean'] = df_rent['area'].apply(clean)
-    df_sale['area_clean'] = df_sale['area'].apply(clean)
+    # Cleaning Data
+    df_rent['area_clean'] = df_rent['area'].apply(clean_loc)
+    df_sale['area_clean'] = df_sale['area'].apply(clean_loc)
     
+    if 'owner_contact' in df_rent.columns:
+        df_rent['contact_clean'] = df_rent['owner_contact'].apply(clean_phone)
+    if 'owner_contact' in df_sale.columns:
+        df_sale['contact_clean'] = df_sale['owner_contact'].apply(clean_phone)
+
     main_rows = []
     matched_rent_idx = set()
     matched_sale_idx = set()
 
     for i, loc in enumerate(main_locations, 1):
-        search_term = clean(loc.split('(')[0])
+        search_term = clean_loc(loc.split('(')[0])
         
-        # Hinjewadi logic
+        # Smart Matching
         if "hinjewadi" in search_term:
             r_mask = df_rent['area_clean'].str.contains('hinjewadi|hinjawadi', na=False)
             s_mask = df_sale['area_clean'].str.contains('hinjewadi|hinjawadi', na=False)
@@ -45,9 +54,9 @@ def process_data(df_rent, df_sale, main_locations):
         matched_rent_idx.update(r_df.index.tolist())
         matched_sale_idx.update(s_df.index.tolist())
         
-        # separate duplicate counts
-        r_dup = len(r_df[r_df.duplicated(subset=['owner_contact'])]) if 'owner_contact' in r_df.columns else 0
-        s_dup = len(s_df[s_df.duplicated(subset=['owner_contact'])]) if 'owner_contact' in s_df.columns else 0
+        # Accurate Duplicate Logic: keeps all duplicates except the first occurrence
+        r_dup = r_df.duplicated(subset=['contact_clean'], keep='first').sum() if 'contact_clean' in r_df.columns else 0
+        s_dup = s_df.duplicated(subset=['contact_clean'], keep='first').sum() if 'contact_clean' in s_df.columns else 0
         
         main_rows.append({
             'Sr. No.': i, 
@@ -94,7 +103,7 @@ if st.button("Generate Final Report"):
 
         df_final = pd.concat([df_main, total_row], ignore_index=True)
 
-        st.subheader("📊 Lead Summary with Separate Duplicates")
+        st.subheader("📊 Lead Summary (Duplicates Fixed)")
         st.dataframe(df_final)
 
         if not df_extra.empty:
